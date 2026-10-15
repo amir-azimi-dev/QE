@@ -43,12 +43,54 @@ jobs:
           restore-keys: |
             qe-${{ matrix.structure }}-${{ github.ref_name }}-
 
-      - name: Install Quantum ESPRESSO and Gnuplot
+      - name: Install Quantum ESPRESSO 7.6 and Gnuplot
         shell: bash
         run: |
           set -euo pipefail
+
           sudo apt-get update
-          sudo apt-get install -y quantum-espresso gnuplot
+          sudo apt-get install -y \
+            build-essential \
+            gfortran \
+            libfftw3-dev \
+            libblas-dev \
+            liblapack-dev \
+            libopenmpi-dev \
+            openmpi-bin \
+            wget \
+            gnuplot
+
+          QE_DIR="$RUNNER_TEMP/q-e-qe-7.6"
+          QE_TAR="$RUNNER_TEMP/q-e-qe-7.6.tar.gz"
+
+          wget -q \
+            https://gitlab.com/QEF/q-e/-/archive/qe-7.6/q-e-qe-7.6.tar.gz \
+            -O "$QE_TAR"
+
+          tar -xzf "$QE_TAR" -C "$RUNNER_TEMP"
+
+          cd "$QE_DIR"
+
+          ./configure \
+            --enable-parallel \
+            BLAS_LIBS="-lblas" \
+            LAPACK_LIBS="-llapack" \
+            FFT_LIBS="-lfftw3" \
+            FFTW_INCLUDE="/usr/include"
+
+          make -j2 pw
+          make -j2 pp
+
+          test -x "$QE_DIR/bin/pw.x"
+          test -x "$QE_DIR/bin/bands.x"
+          test -x "$QE_DIR/bin/projwfc.x"
+          test -x "$QE_DIR/bin/dos.x"
+
+          echo "$QE_DIR/bin" >> "$GITHUB_PATH"
+          echo "QE_DIR=$QE_DIR" >> "$GITHUB_ENV"
+
+          echo "Quantum ESPRESSO build completed."
+          ls -lh "$QE_DIR/bin/pw.x" "$QE_DIR/bin/bands.x" "$QE_DIR/bin/projwfc.x" "$QE_DIR/bin/dos.x"
 
       - name: Select MPI process count
         shell: bash
