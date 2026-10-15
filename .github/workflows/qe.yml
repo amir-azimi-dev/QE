@@ -1,4 +1,3 @@
-```yaml
 name: Quantum ESPRESSO - In2Se3
 
 on:
@@ -240,4 +239,3 @@ jobs:
             ${{ matrix.structure }}/tmp/
             ${{ matrix.structure }}/dos/tmp/
           key: qe-${{ matrix.structure }}-${{ github.ref_name }}-${{ github.run_id }}
-```
