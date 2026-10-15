@@ -10,52 +10,100 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: qe-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   calculate:
+    name: Calculate ${{ matrix.structure }}
     runs-on: ubuntu-latest
     timeout-minutes: 350
+
+    strategy:
+      fail-fast: false
+      matrix:
+        structure: [bot, top]
+
+    env:
+      OMP_NUM_THREADS: "1"
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Restore previous calculation data
-        uses: actions/download-artifact@v4
+      - name: Restore previous outputs
+        uses: actions/cache/restore@v4
         with:
-          name: qe-restart-data
-          path: .
-        continue-on-error: true
+          path: |
+            ${{ matrix.structure }}/tmp/
+            ${{ matrix.structure }}/dos/tmp/
+          key: qe-${{ matrix.structure }}-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            qe-${{ matrix.structure }}-${{ github.ref_name }}-
 
-      - name: Install Quantum ESPRESSO
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y quantum-espresso gnuplot
 
-      - name: Run BOT
+      - name: Select MPI process count
+        run: |
+          NPROC=$(nproc)
+          echo "MPI_NPROC=$NPROC" >> "$GITHUB_ENV"
+          echo "Using $NPROC MPI processes"
+
+      - name: Patch DOS scripts automatically
+        run: |
+          for f in bot/dos/run.sh top/dos/run.sh; do
+            sed -i \
+              -e 's/mpirun -np [0-9][0-9]*/mpirun --oversubscribe -np ${MPI_NPROC}/g' \
+              "$f"
+
+            sed -i '/^[[:space:]]*plot \[/,$d' "$f"
+
+            cat >> "$f" <<'SCRIPT'
+
+          gnuplot <<'GPLOT'
+          set terminal pngcairo size 1200,800
+          set xlabel "Energy (eV)"
+          set ylabel "Projected DOS"
+          set grid
+          set output "pdos.png"
+          if (system("ls XX.k.pdos* >/dev/null 2>&1") == 0) {
+            plot [-1.50:4.50] "XX.k.pdos_atm#1(W)_wfc#1(s)" u 1:2 w l
+          }
+          GPLOT
+          SCRIPT
+          done
+
+      - name: Run band calculations
+        working-directory: ${{ matrix.structure }}
         run: |
           set -e
-          cd bot
           bash run.sh
           bash bandgap.sh
-          cd dos
-          bash run.sh
 
-      - name: Run TOP
+      - name: Run DOS calculations
+        working-directory: ${{ matrix.structure }}/dos
         run: |
           set -e
-          cd ../top
-          bash run.sh
-          bash bandgap.sh
-          cd dos
           bash run.sh
 
-      - name: Save restart data and outputs
+      - name: Save calculation outputs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: qe-restart-data
-          path: |
-            bot/
-            top/
+          name: qe-results-${{ matrix.structure }}
+          path: ${{ matrix.structure }}/
           if-no-files-found: warn
           retention-days: 7
+
+      - name: Save restart cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ matrix.structure }}/tmp/
+            ${{ matrix.structure }}/dos/tmp/
+          key: qe-${{ matrix.structure }}-${{ github.ref_name }}-${{ github.run_id }}
