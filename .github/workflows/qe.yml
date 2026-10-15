@@ -46,48 +46,66 @@ jobs:
       - name: Install Quantum ESPRESSO and Gnuplot
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y quantum-espresso gnuplot
 
       - name: Select MPI process count
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
+
           NPROC=$(nproc)
+          if [ -z "$NPROC" ] || [ "$NPROC" -lt 1 ]; then
+            NPROC=1
+          fi
+
           echo "MPI_NPROC=$NPROC" >> "$GITHUB_ENV"
           echo "Available processors: $NPROC"
+          mpirun --version
 
       - name: Fix pseudopotential paths
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           for d in bot top; do
+            # Input files in bot/ or top/
             for f in "$d"/*.in; do
               [ -f "$f" ] || continue
-              sed -i \
-                's|/home/microlab/Rajabi/psuedo|./dos/pseudo|g' \
+              sed -i -E \
+                "s|^[[:space:]]*pseudo_dir[[:space:]]*=.*|    pseudo_dir = './dos/pseudo/',|" \
                 "$f"
             done
 
+            # Input files in bot/dos/ or top/dos/
             for f in "$d"/dos/*.in; do
               [ -f "$f" ] || continue
-              sed -i \
-                's|/home/microlab/Rajabi/psuedo|./pseudo|g' \
+              sed -i -E \
+                "s|^[[:space:]]*pseudo_dir[[:space:]]*=.*|    pseudo_dir = './pseudo/',|" \
                 "$f"
             done
           done
 
           echo "Checking pseudopotential paths:"
-          grep -nH 'pseudo_dir' \
+          grep -nH -i 'pseudo_dir' \
             bot/*.in top/*.in \
-            bot/dos/*.in top/dos/*.in || true
+            bot/dos/*.in top/dos/*.in
 
-      - name: Patch MPI process counts
+          echo "Checking pseudopotential files:"
+          for d in bot top; do
+            for p in In.pbe-dn-kjpaw_psl.1.0.0.UPF Se.pbe-dn-kjpaw_psl.1.0.0.UPF; do
+              test -s "$d/dos/pseudo/$p" || {
+                echo "ERROR: Missing pseudopotential: $d/dos/pseudo/$p"
+                exit 1
+              }
+            done
+          done
+
+      - name: Patch MPI commands and stop scripts on errors
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           for f in \
             bot/run.sh \
@@ -97,6 +115,16 @@ jobs:
           do
             [ -f "$f" ] || continue
 
+            # Stop on command failures, including commands piped to tee.
+            if ! grep -q 'set -euo pipefail' "$f"; then
+              if head -n 1 "$f" | grep -q '^#!'; then
+                sed -i '2i set -euo pipefail' "$f"
+              else
+                sed -i '1i set -euo pipefail' "$f"
+              fi
+            fi
+
+            # Replace existing MPI process counts.
             sed -i -E \
               "s/mpirun[[:space:]]+-np[[:space:]]+[0-9]+/mpirun --oversubscribe -np ${MPI_NPROC}/g" \
               "$f"
@@ -110,23 +138,26 @@ jobs:
       - name: Fix DOS plotting scripts
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           for f in bot/dos/run.sh top/dos/run.sh; do
             [ -f "$f" ] || continue
 
-            # Remove the old Gnuplot commands at the end.
+            # Remove the previous plotting block, if present.
             sed -i '/^[[:space:]]*plot[[:space:]]*\[/,$d' "$f"
 
             cat >> "$f" <<'SCRIPT'
 
-          # Plot projected DOS using the actual generated filenames.
+          # Plot projected DOS using generated PDOS files.
           shopt -s nullglob
           pdos_files=( *.pdos_atm#*_wfc#* )
 
           if ((${#pdos_files[@]})); then
+            if [ ! -s mx.scf.out ]; then
+              echo "ERROR: mx.scf.out is missing or empty."
+              exit 1
+            fi
 
-            # Read the Fermi energy from the SCF output.
             FERMI=$(awk '
               /the Fermi energy is/ {
                 for (i=1; i<=NF; i++) {
@@ -142,8 +173,6 @@ jobs:
               }
             ' mx.scf.out)
 
-            # For fixed occupations or semiconductors, QE may report
-            # the highest occupied level instead of the Fermi energy.
             if [ -z "$FERMI" ]; then
               FERMI=$(awk '
                 /highest occupied level/ {
@@ -162,7 +191,7 @@ jobs:
             fi
 
             if [ -z "$FERMI" ]; then
-              echo "ERROR: Could not determine the Fermi energy or highest occupied level from mx.scf.out"
+              echo "ERROR: Could not find the Fermi energy or highest occupied level in mx.scf.out"
               exit 1
             fi
 
@@ -201,16 +230,18 @@ jobs:
             } | gnuplot
 
           else
-            echo "No PDOS files found; skipping plots."
+            echo "No PDOS files found; skipping DOS plots."
           fi
           SCRIPT
           done
 
-      - name: Run band calculations
+      - name: Run structural relaxation, SCF and band calculations
         shell: bash
         working-directory: ${{ matrix.structure }}
         run: |
           set -euo pipefail
+
+          echo "Running calculations for ${{ matrix.structure }}"
           bash run.sh
           bash bandgap.sh
 
