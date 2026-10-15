@@ -1,0 +1,6 @@
+ &bands
+    prefix  = 'mx'
+    outdir = './tmp/'
+    filband = 'bands.dat'
+    lsym=.true.,
+ /

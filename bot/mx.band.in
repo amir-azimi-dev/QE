@@ -1,0 +1,57 @@
+ &control
+        calculation='bands'
+	verbosity='high',
+        restart_mode='from_scratch',
+ 	 prefix='mx',
+  	 pseudo_dir = '/home/microlab/Rajabi/psuedo',
+        outdir='./tmp/'
+ /
+
+ &system
+    	ibrav=0,
+	ntyp=2,
+	nat=5,
+	ecutwfc = 60.0,
+	 occupations='smearing',
+	 smearing = 'gaussian',
+	 degauss  = 0.01,
+ /
+
+ &electrons
+ diagonalization = 'david'
+ conv_thr = 1.0d-10
+ mixing_beta = 0.3
+/
+
+&IONS
+/
+
+&CELL
+	cell_dynamics = 'bfgs',
+	cell_dofree = '2Dxy'
+/
+
+ATOMIC_SPECIES
+In  114.818 In.pbe-dn-kjpaw_psl.1.0.0.UPF 
+Se  78.96  Se.pbe-dn-kjpaw_psl.1.0.0.UPF
+
+
+
+CELL_PARAMETERS (angstrom)
+   3.961387465   0.000000000   0.000000000
+   1.980693733   3.430662180   0.000000000
+   0.000000000   0.000000000  28.739340000
+
+ATOMIC_POSITIONS (crystal)
+Se       0.333333333   0.333333333   0.080723511
+In       0.666666667   0.666666667   0.126518737
+Se       0.666666667   0.666666667   0.214093982    
+In       0.000000000   0.000000000   0.273516614
+Se       0.333333333   0.333333333   0.321423197
+
+K_POINTS tpiba_b
+ 4
+  0.00000     0.00000       0.00000    100
+  0.666666    0.00000       0.00000     50 
+  0.500000    0.288675135   0.00000     85 
+  0.00000     0.00000       0.00000      1

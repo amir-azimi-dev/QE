@@ -1,0 +1,6 @@
+ &PROJWFC
+    prefix = 'mx' ,
+    outdir = './tmp/' ,
+    DeltaE = 0.01 ,
+    filpdos='XX.k'
+ /

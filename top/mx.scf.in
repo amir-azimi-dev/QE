@@ -1,0 +1,43 @@
+&control
+         calculation='scf'
+         restart_mode='from_scratch',
+ 	 prefix='mx',
+  	 pseudo_dir = './pseudo/',
+         outdir='./tmp/'       
+ /
+ 
+ &system
+    	ibrav=0,
+	ntyp=2,
+	nat=5,
+	ecutwfc = 60.0,
+	 occupations='smearing',
+	 smearing = 'gaussian',
+	 degauss  = 0.01,
+ /
+ 
+ &electrons
+        diagonalization = 'david'
+        conv_thr =  1.0d-10
+        mixing_beta = 0.3
+ /
+    
+ ATOMIC_SPECIES
+In  114.818 In.pbe-dn-kjpaw_psl.1.0.0.UPF 
+Se  78.96  Se.pbe-dn-kjpaw_psl.1.0.0.UPF
+
+
+CELL_PARAMETERS (angstrom)
+   3.962583559   0.000000000   0.000000000
+   1.981291779   3.431698027   0.000000000
+   0.000000000   0.000000000  28.739340000
+
+ATOMIC_POSITIONS (crystal)
+Se       0.333333333   0.333333333   0.106842042
+In       0.666666667   0.666666667   0.154712957
+Se       0.000000000   0.000000000   0.214093982    
+In       0.000000000   0.000000000   0.301656787
+Se       0.333333333   0.333333333   0.347347208
+
+K_POINTS AUTOMATIC
+12 12 1 0 0 0
