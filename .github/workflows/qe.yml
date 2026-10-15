@@ -1,21 +1,243 @@
-- name: Fix pseudopotential paths
-  shell: bash
-  run: |
-    set -e
+```yaml
+name: Quantum ESPRESSO - In2Se3
 
-    for d in bot top; do
-      # Inputs directly inside bot/ or top/
-      for f in "$d"/*.in; do
-        [ -f "$f" ] || continue
-        sed -i 's|/home/microlab/Rajabi/psuedo|./dos/pseudo|g' "$f"
-      done
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
-      # Inputs inside bot/dos/ or top/dos/
-      for f in "$d"/dos/*.in; do
-        [ -f "$f" ] || continue
-        sed -i 's|/home/microlab/Rajabi/psuedo|./pseudo|g' "$f"
-      done
-    done
+permissions:
+  contents: read
 
-    echo "Updated pseudopotential paths:"
-    grep -nH 'pseudo_dir' bot/*.in top/*.in bot/dos/*.in top/dos/*.in
+concurrency:
+  group: qe-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  calculate:
+    name: Calculate ${{ matrix.structure }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    strategy:
+      fail-fast: false
+      matrix:
+        structure:
+          - bot
+          - top
+
+    env:
+      OMP_NUM_THREADS: "1"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Restore previous QE data
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ matrix.structure }}/tmp/
+            ${{ matrix.structure }}/dos/tmp/
+          key: qe-${{ matrix.structure }}-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            qe-${{ matrix.structure }}-${{ github.ref_name }}-
+
+      - name: Install Quantum ESPRESSO and Gnuplot
+        shell: bash
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y quantum-espresso gnuplot
+
+      - name: Select MPI process count
+        shell: bash
+        run: |
+          set -e
+          NPROC=$(nproc)
+          echo "MPI_NPROC=$NPROC" >> "$GITHUB_ENV"
+          echo "Available processors: $NPROC"
+
+      - name: Fix pseudopotential paths
+        shell: bash
+        run: |
+          set -e
+
+          for d in bot top; do
+            for f in "$d"/*.in; do
+              [ -f "$f" ] || continue
+              sed -i \
+                's|/home/microlab/Rajabi/psuedo|./dos/pseudo|g' \
+                "$f"
+            done
+
+            for f in "$d"/dos/*.in; do
+              [ -f "$f" ] || continue
+              sed -i \
+                's|/home/microlab/Rajabi/psuedo|./pseudo|g' \
+                "$f"
+            done
+          done
+
+          echo "Checking pseudopotential paths:"
+          grep -nH 'pseudo_dir' \
+            bot/*.in top/*.in \
+            bot/dos/*.in top/dos/*.in || true
+
+      - name: Patch MPI process counts
+        shell: bash
+        run: |
+          set -e
+
+          for f in \
+            bot/run.sh \
+            top/run.sh \
+            bot/dos/run.sh \
+            top/dos/run.sh
+          do
+            [ -f "$f" ] || continue
+
+            sed -i -E \
+              "s/mpirun[[:space:]]+-np[[:space:]]+[0-9]+/mpirun --oversubscribe -np ${MPI_NPROC}/g" \
+              "$f"
+          done
+
+          echo "MPI commands after patching:"
+          grep -nH 'mpirun' \
+            bot/run.sh top/run.sh \
+            bot/dos/run.sh top/dos/run.sh
+
+      - name: Fix DOS plotting scripts
+        shell: bash
+        run: |
+          set -e
+
+          for f in bot/dos/run.sh top/dos/run.sh; do
+            [ -f "$f" ] || continue
+
+            # Remove the old Gnuplot commands at the end.
+            sed -i '/^[[:space:]]*plot[[:space:]]*\[/,$d' "$f"
+
+            cat >> "$f" <<'SCRIPT'
+
+          # Plot projected DOS using the actual generated filenames.
+          shopt -s nullglob
+          pdos_files=( *.pdos_atm#*_wfc#* )
+
+          if ((${#pdos_files[@]})); then
+
+            # Read the Fermi energy from the SCF output.
+            FERMI=$(awk '
+              /the Fermi energy is/ {
+                for (i=1; i<=NF; i++) {
+                  if ($i == "is") {
+                    value=$(i+1)
+                    gsub(/[,;]/, "", value)
+                    fermi=value
+                  }
+                }
+              }
+              END {
+                if (fermi != "") print fermi
+              }
+            ' mx.scf.out)
+
+            # For fixed occupations or semiconductors, QE may report
+            # the highest occupied level instead of the Fermi energy.
+            if [ -z "$FERMI" ]; then
+              FERMI=$(awk '
+                /highest occupied level/ {
+                  for (i=1; i<=NF; i++) {
+                    if ($i == "level") {
+                      value=$(i+1)
+                      gsub(/[,;]/, "", value)
+                      level=value
+                    }
+                  }
+                }
+                END {
+                  if (level != "") print level
+                }
+              ' mx.scf.out)
+            fi
+
+            if [ -z "$FERMI" ]; then
+              echo "ERROR: Could not determine the Fermi energy or highest occupied level from mx.scf.out"
+              exit 1
+            fi
+
+            echo "Energy reference for DOS plots: $FERMI eV"
+
+            {
+              cat <<'GPLOT'
+          set terminal pngcairo size 1200,800
+          set xlabel "Energy (eV)"
+          set ylabel "Projected DOS"
+          set grid
+          set output "pdos.png"
+          GPLOT
+
+              printf 'plot [-1.50:4.50] '
+              sep=''
+              for file in "${pdos_files[@]}"; do
+                printf "%s'%s' using 1:2 with lines title '%s'" \
+                  "$sep" "$file" "$file"
+                sep=', '
+              done
+              printf '\n'
+
+              cat <<'GPLOT'
+          set output "pdos_shifted.png"
+          GPLOT
+
+              printf 'plot [-3.0:3.0] '
+              sep=''
+              for file in "${pdos_files[@]}"; do
+                printf "%s'%s' using (\$1-(%s)):2 with lines title '%s'" \
+                  "$sep" "$file" "$FERMI" "$file"
+                sep=', '
+              done
+              printf '\n'
+            } | gnuplot
+
+          else
+            echo "No PDOS files found; skipping plots."
+          fi
+          SCRIPT
+          done
+
+      - name: Run band calculations
+        shell: bash
+        working-directory: ${{ matrix.structure }}
+        run: |
+          set -euo pipefail
+          bash run.sh
+          bash bandgap.sh
+
+      - name: Run DOS calculations
+        shell: bash
+        working-directory: ${{ matrix.structure }}/dos
+        run: |
+          set -euo pipefail
+          bash run.sh
+
+      - name: Upload calculation results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qe-results-${{ matrix.structure }}
+          path: |
+            ${{ matrix.structure }}/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Save QE restart data
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ matrix.structure }}/tmp/
+            ${{ matrix.structure }}/dos/tmp/
+          key: qe-${{ matrix.structure }}-${{ github.ref_name }}-${{ github.run_id }}
+```
