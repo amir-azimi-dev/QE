@@ -1,0 +1,61 @@
+
+name: Quantum ESPRESSO - In2Se3
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  calculate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Restore previous calculation data
+        uses: actions/download-artifact@v4
+        with:
+          name: qe-restart-data
+          path: .
+        continue-on-error: true
+
+      - name: Install Quantum ESPRESSO
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y quantum-espresso gnuplot
+
+      - name: Run BOT
+        run: |
+          set -e
+          cd bot
+          bash run.sh
+          bash bandgap.sh
+          cd dos
+          bash run.sh
+
+      - name: Run TOP
+        run: |
+          set -e
+          cd ../top
+          bash run.sh
+          bash bandgap.sh
+          cd dos
+          bash run.sh
+
+      - name: Save restart data and outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qe-restart-data
+          path: |
+            bot/
+            top/
+          if-no-files-found: warn
+          retention-days: 7
